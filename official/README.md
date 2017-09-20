@@ -6,9 +6,9 @@ Below is the list of models contained in the garden:
 
 [mnist](mnist): A basic model to classify digits from the MNIST dataset.
 
-[resnet](resnet): A deep residual network that can be used to classify both ImageNet's dataset of 1000 classes and CIFAR-10.
+[resnet](resnet): A deep residual network that can be used to classify both CIFAR-10 and ImageNet's dataset of 1000 classes.
 
-[wide-deep](wide-deep)
+[wide_deep](wide_deep): A wide and deep model to predict income with the census income dataset.
 
 More models to come!
 

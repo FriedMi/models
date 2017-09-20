@@ -38,58 +38,67 @@ _BATCH_NORM_DECAY = 0.997
 _BATCH_NORM_EPSILON = 1e-5
 
 
-def batch_norm_relu(inputs, is_training):
+def batch_norm_relu(inputs, is_training, data_format):
   """Performs a batch normalization followed by a ReLU."""
   # We set fused=True for a significant performance boost.
   inputs = tf.layers.batch_normalization(
-      inputs=inputs, axis=1, momentum=_BATCH_NORM_DECAY,
-      epsilon=_BATCH_NORM_EPSILON, center=True, scale=True,
-      training=is_training, fused=True)
+      inputs=inputs, axis=1 if data_format == 'channels_first' else 3,
+      momentum=_BATCH_NORM_DECAY, epsilon=_BATCH_NORM_EPSILON, center=True,
+      scale=True, training=is_training, fused=True)
   inputs = tf.nn.relu(inputs)
   return inputs
 
 
-def fixed_padding(inputs, kernel_size):
+def fixed_padding(inputs, kernel_size, data_format):
   """Pads the input along the spatial dimensions independently of input size.
 
   Args:
-    inputs: A tensor of size [batch, channels, height_in, width_in].
+    inputs: A tensor of size [batch, channels, height_in, width_in] or
+      [batch, height_in, width_in, channels] depending on data_format.
     kernel_size: The kernel to be used in the conv2d or max_pool2d operation.
                  Should be a positive integer.
+    data_format: The input format ('channels_last' or 'channels_first').
 
   Returns:
-    A tensor of size [batch, channels, height_out, width_out] with the
-      input either intact (if kernel_size == 1) or padded (if kernel_size > 1).
+    A tensor with the same format as the input with the data either intact
+    (if kernel_size == 1) or padded (if kernel_size > 1).
   """
   pad_total = kernel_size - 1
   pad_beg = pad_total // 2
   pad_end = pad_total - pad_beg
-  padded_inputs = tf.pad(inputs, [[0, 0], [0, 0],
-                                  [pad_beg, pad_end], [pad_beg, pad_end]])
+
+  if data_format == 'channels_first':
+    padded_inputs = tf.pad(inputs, [[0, 0], [0, 0],
+                                    [pad_beg, pad_end], [pad_beg, pad_end]])
+  else:
+    padded_inputs = tf.pad(inputs, [[0, 0], [pad_beg, pad_end],
+                                    [pad_beg, pad_end], [0, 0]])
   return padded_inputs
 
 
-def conv2d_fixed_padding(inputs, filters, kernel_size, strides):
+def conv2d_fixed_padding(inputs, filters, kernel_size, strides, data_format):
   """Strided 2-D convolution with explicit padding.
 
   The padding is consistent and is based only on `kernel_size`, not on the
   dimensions of `inputs` (as opposed to using `tf.layers.conv2d` alone).
   """
   if strides > 1:
-    inputs = fixed_padding(inputs, kernel_size)
+    inputs = fixed_padding(inputs, kernel_size, data_format)
 
   return tf.layers.conv2d(
       inputs=inputs, filters=filters, kernel_size=kernel_size, strides=strides,
       padding=('SAME' if strides == 1 else 'VALID'), use_bias=False,
       kernel_initializer=tf.variance_scaling_initializer(),
-      data_format='channels_first')
+      data_format=data_format)
 
 
-def building_block(inputs, filters, is_training, projection_shortcut, strides):
+def building_block(inputs, filters, is_training, projection_shortcut, strides,
+                   data_format):
   """Standard building block for residual networks with BN before convolutions.
 
   Args:
-    inputs: A tensor of size [batch, channels, height, width].
+    inputs: A tensor of size [batch, channels, height_in, width_in] or
+      [batch, height_in, width_in, channels] depending on data_format.
     filters: The number of filters for the convolutions.
     is_training: A Boolean for whether the model is in training or inference
       mode. Needed for batch normalization.
@@ -97,12 +106,13 @@ def building_block(inputs, filters, is_training, projection_shortcut, strides):
       a 1x1 convolution when downsampling the input).
     strides: The block's stride. If greater than 1, this block will ultimately
       downsample the input.
+    data_format: The input format ('channels_last' or 'channels_first').
 
   Returns:
     The output tensor of the block.
   """
   shortcut = inputs
-  inputs = batch_norm_relu(inputs, is_training)
+  inputs = batch_norm_relu(inputs, is_training, data_format)
 
   # The projection shortcut should come after the first batch norm and ReLU
   # since it performs a 1x1 convolution.
@@ -110,21 +120,24 @@ def building_block(inputs, filters, is_training, projection_shortcut, strides):
     shortcut = projection_shortcut(inputs)
 
   inputs = conv2d_fixed_padding(
-      inputs=inputs, filters=filters, kernel_size=3, strides=strides)
+      inputs=inputs, filters=filters, kernel_size=3, strides=strides,
+      data_format=data_format)
 
-  inputs = batch_norm_relu(inputs, is_training)
+  inputs = batch_norm_relu(inputs, is_training, data_format)
   inputs = conv2d_fixed_padding(
-      inputs=inputs, filters=filters, kernel_size=3, strides=1)
+      inputs=inputs, filters=filters, kernel_size=3, strides=1,
+      data_format=data_format)
 
   return inputs + shortcut
 
 
 def bottleneck_block(inputs, filters, is_training, projection_shortcut,
-                     strides):
+                     strides, data_format):
   """Bottleneck block variant for residual networks with BN before convolutions.
 
   Args:
-    inputs: A tensor of size [batch, channels, height, width].
+    inputs: A tensor of size [batch, channels, height_in, width_in] or
+      [batch, height_in, width_in, channels] depending on data_format.
     filters: The number of filters for the first two convolutions. Note that the
       third and final convolution will use 4 times as many filters.
     is_training: A Boolean for whether the model is in training or inference
@@ -133,12 +146,13 @@ def bottleneck_block(inputs, filters, is_training, projection_shortcut,
       a 1x1 convolution when downsampling the input).
     strides: The block's stride. If greater than 1, this block will ultimately
       downsample the input.
+    data_format: The input format ('channels_last' or 'channels_first').
 
   Returns:
     The output tensor of the block.
   """
   shortcut = inputs
-  inputs = batch_norm_relu(inputs, is_training)
+  inputs = batch_norm_relu(inputs, is_training, data_format)
 
   # The projection shortcut should come after the first batch norm and ReLU
   # since it performs a 1x1 convolution.
@@ -146,24 +160,29 @@ def bottleneck_block(inputs, filters, is_training, projection_shortcut,
     shortcut = projection_shortcut(inputs)
 
   inputs = conv2d_fixed_padding(
-      inputs=inputs, filters=filters, kernel_size=1, strides=1)
+      inputs=inputs, filters=filters, kernel_size=1, strides=1,
+      data_format=data_format)
 
-  inputs = batch_norm_relu(inputs, is_training)
+  inputs = batch_norm_relu(inputs, is_training, data_format)
   inputs = conv2d_fixed_padding(
-      inputs=inputs, filters=filters, kernel_size=3, strides=strides)
+      inputs=inputs, filters=filters, kernel_size=3, strides=strides,
+      data_format=data_format)
 
-  inputs = batch_norm_relu(inputs, is_training)
+  inputs = batch_norm_relu(inputs, is_training, data_format)
   inputs = conv2d_fixed_padding(
-      inputs=inputs, filters=4 * filters, kernel_size=1, strides=1)
+      inputs=inputs, filters=4 * filters, kernel_size=1, strides=1,
+      data_format=data_format)
 
   return inputs + shortcut
 
 
-def block_layer(inputs, filters, block_fn, blocks, strides, is_training, name):
+def block_layer(inputs, filters, block_fn, blocks, strides, is_training, name,
+                data_format):
   """Creates one layer of blocks for the ResNet model.
 
   Args:
-    inputs: A tensor of size [batch, channels, height, width].
+    inputs: A tensor of size [batch, channels, height_in, width_in] or
+      [batch, height_in, width_in, channels] depending on data_format.
     filters: The number of filters for the first convolution of the layer.
     block_fn: The block to use within the model, either `building_block` or
       `bottleneck_block`.
@@ -173,6 +192,7 @@ def block_layer(inputs, filters, block_fn, blocks, strides, is_training, name):
     is_training: Either True or False, whether we are currently training the
       model. Needed for batch norm.
     name: A string name for the tensor output of the block layer.
+    data_format: The input format ('channels_last' or 'channels_first').
 
   Returns:
     The output tensor of the block layer.
@@ -182,23 +202,27 @@ def block_layer(inputs, filters, block_fn, blocks, strides, is_training, name):
 
   def projection_shortcut(inputs):
     return conv2d_fixed_padding(
-        inputs=inputs, filters=filters_out, kernel_size=1, strides=strides)
+        inputs=inputs, filters=filters_out, kernel_size=1, strides=strides,
+        data_format=data_format)
 
   # Only the first block per block_layer uses projection_shortcut and strides
-  inputs = block_fn(inputs, filters, is_training, projection_shortcut, strides)
+  inputs = block_fn(inputs, filters, is_training, projection_shortcut, strides,
+                    data_format)
 
   for i in range(1, blocks):
-    inputs = block_fn(inputs, filters, is_training, None, 1)
+    inputs = block_fn(inputs, filters, is_training, None, 1, data_format)
 
   return tf.identity(inputs, name)
 
 
-def cifar10_resnet_v2_generator(resnet_size, num_classes):
+def cifar10_resnet_v2_generator(resnet_size, num_classes, data_format=None):
   """Generator for CIFAR-10 ResNet v2 models.
 
   Args:
     resnet_size: A single integer for the size of the ResNet model.
     num_classes: The number of possible classes for image classification.
+    data_format: The input format ('channels_last', 'channels_first', or None).
+      If set to None, the format is dependent on whether a GPU is available.
 
   Returns:
     The model function that takes in `inputs` and `is_training` and
@@ -209,30 +233,38 @@ def cifar10_resnet_v2_generator(resnet_size, num_classes):
 
   num_blocks = (resnet_size - 2) // 6
 
+  if data_format is None:
+    data_format = 'channels_first' if tf.test.is_built_with_cuda() else 'channels_last'
+
   def model(inputs, is_training):
-    # Convert from channels_last (NHWC) to channels_first (NCHW). This provides
-    # a large performance boost on GPU.
-    inputs = tf.transpose(inputs, [0, 3, 1, 2])
+    if data_format == 'channels_first':
+      # Convert from channels_last (NHWC) to channels_first (NCHW). This
+      # provides a large performance boost on GPU.
+      inputs = tf.transpose(inputs, [0, 3, 1, 2])
 
     inputs = conv2d_fixed_padding(
-        inputs=inputs, filters=16, kernel_size=3, strides=1)
+        inputs=inputs, filters=16, kernel_size=3, strides=1,
+        data_format=data_format)
     inputs = tf.identity(inputs, 'initial_conv')
 
     inputs = block_layer(
         inputs=inputs, filters=16, block_fn=building_block, blocks=num_blocks,
-        strides=1, is_training=is_training, name='block_layer1')
+        strides=1, is_training=is_training, name='block_layer1',
+        data_format=data_format)
     inputs = block_layer(
         inputs=inputs, filters=32, block_fn=building_block, blocks=num_blocks,
-        strides=2, is_training=is_training, name='block_layer2')
+        strides=2, is_training=is_training, name='block_layer2',
+        data_format=data_format)
     inputs = block_layer(
         inputs=inputs, filters=64, block_fn=building_block, blocks=num_blocks,
-        strides=2, is_training=is_training, name='block_layer3')
+        strides=2, is_training=is_training, name='block_layer3',
+        data_format=data_format)
 
-    inputs = batch_norm_relu(inputs, is_training)
+    inputs = batch_norm_relu(inputs, is_training, data_format)
 
     inputs = tf.layers.average_pooling2d(
         inputs=inputs, pool_size=8, strides=1, padding='VALID',
-        data_format='channels_first')
+        data_format=data_format)
     inputs = tf.identity(inputs, 'final_avg_pool')
     inputs = tf.reshape(inputs, [-1, 64])
     inputs = tf.layers.dense(
@@ -244,7 +276,8 @@ def cifar10_resnet_v2_generator(resnet_size, num_classes):
   return model
 
 
-def imagenet_resnet_v2_generator(block_fn, layers, num_classes):
+def imagenet_resnet_v2_generator(block_fn, layers, num_classes,
+                                 data_format=None):
   """Generator for ImageNet ResNet v2 models.
 
   Args:
@@ -253,41 +286,52 @@ def imagenet_resnet_v2_generator(block_fn, layers, num_classes):
     layers: A length-4 array denoting the number of blocks to include in each
       layer. Each layer consists of blocks that take inputs of the same size.
     num_classes: The number of possible classes for image classification.
+    data_format: The input format ('channels_last', 'channels_first', or None).
+      If set to None, the format is dependent on whether a GPU is available.
 
   Returns:
     The model function that takes in `inputs` and `is_training` and
     returns the output tensor of the ResNet model.
   """
+  if data_format is None:
+    data_format = 'channels_first' if tf.test.is_built_with_cuda() else 'channels_last'
+
   def model(inputs, is_training):
-    # Convert from channels_last (NHWC) to channels_first (NCHW). This provides
-    # a large performance boost on GPU.
-    inputs = tf.transpose(inputs, [0, 3, 1, 2])
+    if data_format == 'channels_first':
+      # Convert from channels_last (NHWC) to channels_first (NCHW). This
+      # provides a large performance boost on GPU.
+      inputs = tf.transpose(inputs, [0, 3, 1, 2])
 
     inputs = conv2d_fixed_padding(
-        inputs=inputs, filters=64, kernel_size=7, strides=2)
+        inputs=inputs, filters=64, kernel_size=7, strides=2,
+        data_format=data_format)
     inputs = tf.identity(inputs, 'initial_conv')
     inputs = tf.layers.max_pooling2d(
         inputs=inputs, pool_size=3, strides=2, padding='SAME',
-        data_format='channels_first')
+        data_format=data_format)
     inputs = tf.identity(inputs, 'initial_max_pool')
 
     inputs = block_layer(
         inputs=inputs, filters=64, block_fn=block_fn, blocks=layers[0],
-        strides=1, is_training=is_training, name='block_layer1')
+        strides=1, is_training=is_training, name='block_layer1',
+        data_format=data_format)
     inputs = block_layer(
         inputs=inputs, filters=128, block_fn=block_fn, blocks=layers[1],
-        strides=2, is_training=is_training, name='block_layer2')
+        strides=2, is_training=is_training, name='block_layer2',
+        data_format=data_format)
     inputs = block_layer(
         inputs=inputs, filters=256, block_fn=block_fn, blocks=layers[2],
-        strides=2, is_training=is_training, name='block_layer3')
+        strides=2, is_training=is_training, name='block_layer3',
+        data_format=data_format)
     inputs = block_layer(
         inputs=inputs, filters=512, block_fn=block_fn, blocks=layers[3],
-        strides=2, is_training=is_training, name='block_layer4')
+        strides=2, is_training=is_training, name='block_layer4',
+        data_format=data_format)
 
-    inputs = batch_norm_relu(inputs, is_training)
+    inputs = batch_norm_relu(inputs, is_training, data_format)
     inputs = tf.layers.average_pooling2d(
         inputs=inputs, pool_size=7, strides=1, padding='VALID',
-        data_format='channels_first')
+        data_format=data_format)
     inputs = tf.identity(inputs, 'final_avg_pool')
     inputs = tf.reshape(inputs, [inputs.get_shape()[0].value, -1])
     inputs = tf.layers.dense(inputs=inputs, units=num_classes)
@@ -298,7 +342,7 @@ def imagenet_resnet_v2_generator(block_fn, layers, num_classes):
   return model
 
 
-def resnet_v2(resnet_size, num_classes):
+def resnet_v2(resnet_size, num_classes, data_format=None):
   """Returns the ResNet model for a given size and number of output classes."""
   model_params = {
       18: {'block': building_block, 'layers': [2, 2, 2, 2]},
@@ -314,4 +358,4 @@ def resnet_v2(resnet_size, num_classes):
 
   params = model_params[resnet_size]
   return imagenet_resnet_v2_generator(
-      params['block'], params['layers'], num_classes)
+      params['block'], params['layers'], num_classes, data_format)

@@ -61,6 +61,9 @@ FLAGS = parser.parse_args()
 # 128, the learning rate should be 0.1.
 _INITIAL_LEARNING_RATE = 0.1 * FLAGS.batch_size / 128
 _MOMENTUM = 0.9
+
+# We use a weight decay of 0.0002, which performs better than the 0.0001 that
+# was originally suggested.
 _WEIGHT_DECAY = 2e-4
 
 _BATCHES_PER_EPOCH = NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN / FLAGS.batch_size

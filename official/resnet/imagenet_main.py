@@ -142,7 +142,7 @@ def resnet_model_fn(features, labels, mode):
 
     # Multiply the learning rate by 0.1 at 30, 60, 120, and 150 epochs.
     boundaries = [
-        int(batches_per_epoch * epoch) for epoch in [15, 25, 40, 50]]
+        int(batches_per_epoch * epoch) for epoch in [30, 60, 120, 150]]
     values = [
         _INITIAL_LEARNING_RATE * decay for decay in [1, 0.1, 0.01, 1e-3, 1e-4]]
     learning_rate = tf.train.piecewise_constant(

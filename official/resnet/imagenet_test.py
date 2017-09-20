@@ -17,6 +17,8 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import unittest
+
 import tensorflow as tf
 
 import imagenet_main
@@ -28,12 +30,26 @@ _LABEL_CLASSES = 1001
 
 
 class BaseTest(tf.test.TestCase):
-  def tensor_shapes_helper(self, resnet_size):
+
+  def tensor_shapes_helper(self, resnet_size, with_gpu=False):
     """Checks the tensor shapes after each phase of the ResNet model."""
+    def reshape(shape):
+      """Returns the expected dimensions depending on if gpu is being used.
+
+      If a GPU is used for the test, the shape is returned (already in NCHW
+      form). When GPU is not used, the shape is converted to NHWC.
+      """
+      if with_gpu:
+        return shape
+      return shape[0], shape[2], shape[3], shape[1]
+
     graph = tf.Graph()
 
-    with graph.as_default():
-      model = resnet_model.resnet_v2(resnet_size, 456)
+    with graph.as_default(), self.test_session(
+        use_gpu=with_gpu, force_gpu=with_gpu):
+      model = resnet_model.resnet_v2(
+          resnet_size, 456,
+          data_format='channels_first' if with_gpu else 'channels_last')
       inputs = tf.random_uniform([1, 224, 224, 3])
       output = model(inputs, is_training=True)
 
@@ -46,23 +62,23 @@ class BaseTest(tf.test.TestCase):
       avg_pool = graph.get_tensor_by_name('final_avg_pool:0')
       dense = graph.get_tensor_by_name('final_dense:0')
 
-      self.assertAllEqual(initial_conv.shape, (1, 64, 112, 112))
-      self.assertAllEqual(max_pool.shape, (1, 64, 56, 56))
+      self.assertAllEqual(initial_conv.shape, reshape((1, 64, 112, 112)))
+      self.assertAllEqual(max_pool.shape, reshape((1, 64, 56, 56)))
 
       # The number of channels after each block depends on whether we're
       # using the building_block or the bottleneck_block.
       if resnet_size < 50:
-        self.assertAllEqual(block_layer1.shape, (1, 64, 56, 56))
-        self.assertAllEqual(block_layer2.shape, (1, 128, 28, 28))
-        self.assertAllEqual(block_layer3.shape, (1, 256, 14, 14))
-        self.assertAllEqual(block_layer4.shape, (1, 512, 7, 7))
-        self.assertAllEqual(avg_pool.shape, (1, 512, 1, 1))
+        self.assertAllEqual(block_layer1.shape, reshape((1, 64, 56, 56)))
+        self.assertAllEqual(block_layer2.shape, reshape((1, 128, 28, 28)))
+        self.assertAllEqual(block_layer3.shape, reshape((1, 256, 14, 14)))
+        self.assertAllEqual(block_layer4.shape, reshape((1, 512, 7, 7)))
+        self.assertAllEqual(avg_pool.shape, reshape((1, 512, 1, 1)))
       else:
-        self.assertAllEqual(block_layer1.shape, (1, 256, 56, 56))
-        self.assertAllEqual(block_layer2.shape, (1, 512, 28, 28))
-        self.assertAllEqual(block_layer3.shape, (1, 1024, 14, 14))
-        self.assertAllEqual(block_layer4.shape, (1, 2048, 7, 7))
-        self.assertAllEqual(avg_pool.shape, (1, 2048, 1, 1))
+        self.assertAllEqual(block_layer1.shape, reshape((1, 256, 56, 56)))
+        self.assertAllEqual(block_layer2.shape, reshape((1, 512, 28, 28)))
+        self.assertAllEqual(block_layer3.shape, reshape((1, 1024, 14, 14)))
+        self.assertAllEqual(block_layer4.shape, reshape((1, 2048, 7, 7)))
+        self.assertAllEqual(avg_pool.shape, reshape((1, 2048, 1, 1)))
 
       self.assertAllEqual(dense.shape, (1, 456))
       self.assertAllEqual(output.shape, (1, 456))
@@ -84,6 +100,30 @@ class BaseTest(tf.test.TestCase):
 
   def test_tensor_shapes_resnet_200(self):
     self.tensor_shapes_helper(200)
+
+  @unittest.skipUnless(tf.test.is_built_with_cuda(), 'requires GPU')
+  def test_tensor_shapes_resnet_18_with_gpu(self):
+    self.tensor_shapes_helper(18, True)
+
+  @unittest.skipUnless(tf.test.is_built_with_cuda(), 'requires GPU')
+  def test_tensor_shapes_resnet_34_with_gpu(self):
+    self.tensor_shapes_helper(34, True)
+
+  @unittest.skipUnless(tf.test.is_built_with_cuda(), 'requires GPU')
+  def test_tensor_shapes_resnet_50_with_gpu(self):
+    self.tensor_shapes_helper(50, True)
+
+  @unittest.skipUnless(tf.test.is_built_with_cuda(), 'requires GPU')
+  def test_tensor_shapes_resnet_101_with_gpu(self):
+    self.tensor_shapes_helper(101, True)
+
+  @unittest.skipUnless(tf.test.is_built_with_cuda(), 'requires GPU')
+  def test_tensor_shapes_resnet_152_with_gpu(self):
+    self.tensor_shapes_helper(152, True)
+
+  @unittest.skipUnless(tf.test.is_built_with_cuda(), 'requires GPU')
+  def test_tensor_shapes_resnet_200_with_gpu(self):
+    self.tensor_shapes_helper(200, True)
 
   def input_fn(self):
     """Provides random features and labels."""
